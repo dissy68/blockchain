@@ -136,7 +136,7 @@ func TestLedgerConsistency(t *testing.T) {
 	go peers[2].FloodTransaction(tx3)
 	go peers[1].FloodTransaction(tx2)
 
-	time.Sleep(100 * time.Millisecond) // Wait for transactions to propagate
+	time.Sleep(1 * time.Second) // Wait for transactions to propagate, BAD PRACTICE
 
 	if !verifyLedgerConsistency(t, peers) {
 		t.Errorf("Ledgers are inconsistent after transactions")
