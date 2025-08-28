@@ -25,6 +25,8 @@ type Peer struct {
 
 	ledger *account.Ledger
 
+	done chan struct{}
+
 	//Done chan struct{} // Not used yet, do a better less abrupt disconnect
 }
 
@@ -43,6 +45,7 @@ func NewPeer(addr string, port int) *Peer {
 		port:   port,
 		conns:  make(map[string]Conn),
 		ledger: account.MakeLedger(),
+		done:   make(chan struct{}),
 	}
 }
 
@@ -56,7 +59,7 @@ func (p *Peer) Connect(addr string, port int) error {
 	conn, err := net.Dial("tcp", fmtAddr(addr, port))
 	if err != nil {
 		// New network
-		fmt.Println("DEBUG: New network", p.peers)
+		// TODO: TEST BEING ALONE IN A NETWORK
 		return nil
 	}
 	// Ask for set of peers
@@ -79,7 +82,7 @@ func (p *Peer) Connect(addr string, port int) error {
 		panic(-1)
 	}
 	p.peers = append(p.peers, p.Addr())
-	fmt.Println("Set of peers: ", p.peers)
+	// TODO: TEST set of peers
 
 	joinMessage := map[string]string{"cmd": "join", "peer": p.Addr()}
 
@@ -88,10 +91,21 @@ func (p *Peer) Connect(addr string, port int) error {
 }
 
 func (p *Peer) Disconnect() {
-	p.ln.Close()
-	for _, conn := range p.conns {
-		conn.conn.Close()
+	close(p.done)
+
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	if p.ln != nil {
+		// This will cause ln.Accept() to return error
+		p.ln.Close()
 	}
+
+	for peer, conn := range p.conns {
+		conn.conn.Close()
+		delete(p.conns, peer)
+	}
+	// TODO: TEST Disconnect
 }
 
 func (p *Peer) Addr() string {
@@ -137,24 +151,35 @@ func (p *Peer) Start() error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("I am listening on ", fmtAddr(p.addr, p.port))
+	// TODO: Test Start
 	p.ln = ln
 	p.peers = []string{p.Addr()}
 	go func() {
 		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				// Probably ln.Close() called
-				// return
-				panic(err)
+			select {
+			case <-p.done:
+				return
+			default:
+				conn, err := ln.Accept()
+				if err != nil {
+					select {
+					case <-p.done:
+						return // We shouldn't be in here anyways, due to the select above
+					default:
+						panic(err)
+					}
+				}
+				// Make this code cleaner
+				enc := json.NewEncoder(conn)
+				dec := json.NewDecoder(conn)
+				possible_new_peer := conn.RemoteAddr().String()
+
+				p.lock.Lock()
+				p.conns[possible_new_peer] = Conn{conn, enc, dec}
+				p.lock.Unlock()
+				//p.addConn(conn)
+				go p.readLoop(possible_new_peer)
 			}
-			// Make this code cleaner
-			enc := json.NewEncoder(conn)
-			dec := json.NewDecoder(conn)
-			possible_new_peer := conn.RemoteAddr().String()
-			p.conns[possible_new_peer] = Conn{conn, enc, dec}
-			//p.addConn(conn)
-			go p.readLoop(possible_new_peer)
 		}
 	}()
 	return nil
@@ -162,21 +187,39 @@ func (p *Peer) Start() error {
 
 func (p *Peer) readLoop(peer string) {
 	for {
+		select {
+		case <-p.done:
+			return
+		default:
+		}
+		p.lock.Lock()
+		conn, ok := p.conns[peer]
+		p.lock.Unlock()
+		if !ok {
+			// Connection was closed
+			return
+		}
+
 		var msg map[string]string
-		conn := p.conns[peer]
 		err := conn.dec.Decode(&msg)
 		if err != nil {
-			fmt.Println("Failed to decode message on message loop")
-			//delete(p.conns, peer)
-			//return
-			panic(-1)
+			select {
+			case <-p.done:
+				return
+			default:
+				fmt.Println("Failed to decode message on message loop")
+				p.lock.Lock()
+				delete(p.conns, peer)
+				p.lock.Unlock()
+				return
+			}
 		}
 		err = p.handleMessage(peer, msg)
 		if err != nil {
 			fmt.Println("Failed to handle message on message loop")
 			//delete(p.conns, peer)
 			//return
-			panic(-1)
+			panic(-1) // Should not happen, no currupted messages allowed for now
 		}
 	}
 }

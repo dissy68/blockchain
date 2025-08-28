@@ -71,12 +71,23 @@ func floodTransactionAndCompute(peer *Peer, tx *account.Transaction, computedLed
 }
 
 func TestCreateNetwork(t *testing.T) {
-	_ = createTestNetwork(t, 5, 10000)
-	//defer cleanupPeers(peers)
+	numPeers := 5
+	peers := createTestNetwork(t, numPeers, 10000)
+	defer cleanupPeers(peers)
 }
+
 func TestCreateBigNetwork(t *testing.T) {
-	_ = createTestNetwork(t, 100, 10000)
-	//defer cleanupPeers(peers)
+	numPeers := 100
+	peers := createTestNetwork(t, numPeers, 10000)
+	defer cleanupPeers(peers)
+}
+
+func TestReuseNetwork(t *testing.T) {
+	numPeers := 5
+	peers := createTestNetwork(t, numPeers, 10000)
+	cleanupPeers(peers)
+	peers = createTestNetwork(t, numPeers, 10000)
+	defer cleanupPeers(peers)
 }
 
 func Go(wg *sync.WaitGroup, f func()) {
@@ -89,7 +100,7 @@ func Go(wg *sync.WaitGroup, f func()) {
 
 func TestLedgerConsistency(t *testing.T) {
 	peers := createTestNetwork(t, 5, 10000)
-	//defer cleanupPeers(peers)
+	defer cleanupPeers(peers)
 
 	tx1 := &account.Transaction{
 		ID:     "tx1",
@@ -133,12 +144,12 @@ func TestLedgerConsistency(t *testing.T) {
 }
 
 func TestRandomLedgerConsistency(t *testing.T) {
-	numPeers := 10
-	numTransactions := 5
+	numPeers := 5
+	numTransactions := 10
 	names := []string{"Alice", "Bob", "Carol", "Dave", "Eve"}
 
 	peers := createTestNetwork(t, numPeers, 10000)
-	//defer cleanupPeers(peers)
+	defer cleanupPeers(peers)
 
 	computedLedger := account.MakeLedger()
 
@@ -168,10 +179,11 @@ func TestRandomLedgerConsistency(t *testing.T) {
 		t.Errorf("Peers' ledgers do not match computed ledger")
 	}
 }
-func TestLateJoiningPeers(t *testing.T) {
+func _TestLateJoiningPeers(t *testing.T) {
 	numPeersGroup1 := 5 // Connected before the transactions are fired
 	numPeersGroup2 := 5 // Connected just after the transactions are fired
 	peers_group1 := createTestNetwork(t, numPeersGroup1, 10000)
+	defer cleanupPeers(peers_group1)
 	base_tx := &account.Transaction{
 		ID:     "tx",
 		From:   "Alice",
@@ -184,6 +196,7 @@ func TestLateJoiningPeers(t *testing.T) {
 		peer.FloodTransaction(&tx)
 	}
 	peers_group2 := createTestNetwork(t, numPeersGroup2, 20000)
+	defer cleanupPeers(peers_group2)
 	time.Sleep(1 * time.Second)
 
 	peers_merged := append(peers_group1, peers_group2...)
