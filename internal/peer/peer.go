@@ -3,7 +3,7 @@ package peer
 import (
 	"encoding/json"
 	"fmt"
-	"ledger/account"
+	"ledger/internal/account"
 	"net"
 	"sync"
 )

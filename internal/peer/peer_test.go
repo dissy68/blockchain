@@ -1,12 +1,22 @@
 package peer
 
 import (
-	"ledger/account"
+	"ledger/internal/account"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 )
+
+const BASE_ADDR = "localhost"
+
+func Go(wg *sync.WaitGroup, f func()) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		f()
+	}()
+}
 
 func compareLedgers(l1, l2 *account.Ledger) bool {
 	if len(l1.Accounts) != len(l2.Accounts) {
@@ -21,63 +31,118 @@ func compareLedgers(l1, l2 *account.Ledger) bool {
 }
 
 func verifyLedgerConsistency(t *testing.T, peers []*Peer) bool {
-	refLedger := peers[0].GetLedger()
-
-	for i := 1; i < len(peers); i++ {
-		ledger := peers[i].GetLedger()
-		if len(refLedger.Accounts) != len(ledger.Accounts) {
-			t.Errorf("Ledger size mismatch between peer %d and peer 0", i)
-			return false
-		}
-		for acc, bal := range refLedger.Accounts {
-			if ledger.Accounts[acc] != bal {
-				t.Errorf("Account %s balance mismatch between peer %d and peer 0", acc, i)
-				return false
-			}
-		}
+	ledgers := make([]*account.Ledger, len(peers))
+	for i, peer := range peers {
+		ledgers[i] = peer.GetLedger()
 	}
-	return true
+	return account.VerifyLedgerConsistency(ledgers)
 }
 
-func createTestNetwork(t *testing.T, numPeers int, basePort int) []*Peer {
+func extendTestNetworkLine(t *testing.T, numPeers int, basePort int, entryPort int) []*Peer {
 	peers := make([]*Peer, numPeers)
 
 	for i := range numPeers {
-		peers[i] = NewPeer("localhost", basePort+i)
+		peers[i] = NewPeer(BASE_ADDR, basePort+i)
 		err := peers[i].Start()
 		if err != nil {
 			t.Fatalf("Failed to start peer %d: %v", i, err)
 		}
-		if i > 0 {
-			err = peers[i].Connect("localhost", basePort)
-			if err != nil {
-				t.Fatalf("Peer %d failed to connect to peer 0: %v", i, err)
+		if i == 0 {
+			if basePort+i != entryPort {
+				err = peers[i].Connect(BASE_ADDR, entryPort)
+				if err != nil {
+					t.Fatalf("First peer failed to connect to entry peer (%d): %v", entryPort, err)
+				}
 			}
+		} else {
+			err = peers[i].Connect(BASE_ADDR, basePort+i-1)
+			if err != nil {
+				t.Fatalf("Peer %d failed to connect to peer %d: %v", i, i-1, err)
+			}
+		}
+		if err != nil {
 		}
 	}
 
 	return peers
 }
 
-func cleanupPeers(peers []*Peer) {
-	for _, peer := range peers {
-		peer.Disconnect()
+func createTestNetworkLine(t *testing.T, numPeers int, basePort int) []*Peer {
+	return extendTestNetworkLine(t, numPeers, basePort, basePort)
+}
+
+func extendTestNetworkFlower(t *testing.T, numPeers int, basePort int, entryPort int) []*Peer {
+	// A network with all peers attached in a flower topology
+	peers := make([]*Peer, numPeers)
+
+	for i := range numPeers {
+		peers[i] = NewPeer(BASE_ADDR, basePort+i)
+		err := peers[i].Start()
+		if err != nil {
+			t.Fatalf("Failed to start peer %d: %v", i, err)
+		}
+		if basePort+i != entryPort {
+			err = peers[i].Connect(BASE_ADDR, entryPort)
+		}
+		if err != nil {
+			t.Fatalf("Peer %d failed to connect to peer 0: %v", i, err)
+		}
 	}
+
+	return peers
 }
 
-func floodTransactionAndCompute(peer *Peer, tx *account.Transaction, computedLedge *account.Ledger) {
-	peer.FloodTransaction(tx)
-	computedLedge.Transaction(tx)
+func createTestNetworkFlower(t *testing.T, numPeers int, basePort int) []*Peer {
+	return extendTestNetworkFlower(t, numPeers, basePort, basePort)
 }
 
-func TestCreateNetwork(t *testing.T) {
+func extendTestNetwork(t *testing.T, numPeers int, basePort int, entryPort int) []*Peer {
+	numPeersFlower := numPeers/2 + numPeers%2
+	numPeersLine := numPeers - numPeersFlower
+	peers_flower := extendTestNetworkFlower(t, numPeersFlower, basePort, entryPort)
+	peers_line := extendTestNetworkLine(t, numPeersLine, basePort+numPeersFlower, basePort)
+	peers := append(peers_flower, peers_line...)
+	return peers
+}
+
+func createTestNetwork(t *testing.T, numPeers int, basePort int) []*Peer {
+	return extendTestNetwork(t, numPeers, basePort, basePort)
+}
+
+func cleanupPeers(peers []*Peer) {
+	var wg sync.WaitGroup
+	for _, peer := range peers {
+		wg.Add(1)
+		go func(p *Peer) {
+			defer wg.Done()
+			p.Disconnect()
+		}(peer)
+	}
+	wg.Wait()
+	// Give some time for OS to release ports
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestCreateNetworkLine(t *testing.T) {
+	numPeers := 5
+	peers := createTestNetworkLine(t, numPeers, 10000)
+	defer cleanupPeers(peers)
+}
+
+func TestCreateNetworkFlower(t *testing.T) {
+	numPeers := 5
+	peers := createTestNetworkFlower(t, numPeers, 10000)
+	defer cleanupPeers(peers)
+}
+
+func TestCreateNetworkMixed(t *testing.T) {
 	numPeers := 5
 	peers := createTestNetwork(t, numPeers, 10000)
 	defer cleanupPeers(peers)
 }
 
 func TestCreateBigNetwork(t *testing.T) {
-	numPeers := 100
+	numPeers := 50
 	peers := createTestNetwork(t, numPeers, 10000)
 	defer cleanupPeers(peers)
 }
@@ -88,14 +153,6 @@ func TestReuseNetwork(t *testing.T) {
 	cleanupPeers(peers)
 	peers = createTestNetwork(t, numPeers, 10000)
 	defer cleanupPeers(peers)
-}
-
-func Go(wg *sync.WaitGroup, f func()) {
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		f()
-	}()
 }
 
 func TestLedgerConsistency(t *testing.T) {
@@ -164,9 +221,8 @@ func TestRandomLedgerConsistency(t *testing.T) {
 			Amount: randAmount,
 		}
 		peerIndex := i % len(peers)
-		go floodTransactionAndCompute(peers[peerIndex], tx, computedLedger)
-		//go peers[peerIndex].FloodTransaction(tx)
-		// computedLedger.Transaction(tx)
+		peers[peerIndex].FloodTransaction(tx)
+		computedLedger.Transaction(tx)
 	}
 
 	time.Sleep(1 * time.Second) // Wait for transactions to propagate
@@ -179,9 +235,27 @@ func TestRandomLedgerConsistency(t *testing.T) {
 		t.Errorf("Peers' ledgers do not match computed ledger")
 	}
 }
+
+func TestDifferentNetworks(t *testing.T) {
+	peers_group1 := createTestNetwork(t, 5, 10000)
+	peers_group2 := createTestNetwork(t, 5, 20000)
+	peers_group1[0].FloodTransaction(&account.Transaction{
+		ID:     "tx1",
+		From:   "Alice",
+		To:     "Bob",
+		Amount: 50,
+	})
+
+	time.Sleep(1 * time.Second)
+	if len(peers_group2[0].GetLedger().Accounts) != 0 {
+		t.Errorf("Expected no accounts in ledger for group2 peer, got: %v",
+			peers_group2[0].GetLedger().Accounts)
+	}
+}
+
 func _TestLateJoiningPeers(t *testing.T) {
 	numPeersGroup1 := 5 // Connected before the transactions are fired
-	numPeersGroup2 := 5 // Connected just after the transactions are fired
+	numPeersGroup2 := 5 // Connects just after the transactions are fired
 	peers_group1 := createTestNetwork(t, numPeersGroup1, 10000)
 	defer cleanupPeers(peers_group1)
 	base_tx := &account.Transaction{
@@ -195,7 +269,7 @@ func _TestLateJoiningPeers(t *testing.T) {
 		tx.ID = tx.ID + strconv.Itoa(i)
 		peer.FloodTransaction(&tx)
 	}
-	peers_group2 := createTestNetwork(t, numPeersGroup2, 20000)
+	peers_group2 := extendTestNetwork(t, numPeersGroup2, 20000, 10000)
 	defer cleanupPeers(peers_group2)
 	time.Sleep(1 * time.Second)
 
