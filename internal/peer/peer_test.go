@@ -10,14 +10,6 @@ import (
 
 const BASE_ADDR = "localhost"
 
-func Go(wg *sync.WaitGroup, f func()) {
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		f()
-	}()
-}
-
 func compareLedgers(l1, l2 *account.Ledger) bool {
 	if len(l1.Accounts) != len(l2.Accounts) {
 		return false
@@ -136,7 +128,13 @@ func TestCreateNetworkFlower(t *testing.T) {
 }
 
 func TestCreateNetworkMixed(t *testing.T) {
-	numPeers := 5
+	numPeers := 10
+	peers := createTestNetwork(t, numPeers, 10000)
+	defer cleanupPeers(peers)
+}
+
+func TestCreateNetworkRandom(t *testing.T) {
+	numPeers := 10
 	peers := createTestNetwork(t, numPeers, 10000)
 	defer cleanupPeers(peers)
 }
@@ -145,6 +143,16 @@ func TestCreateBigNetwork(t *testing.T) {
 	numPeers := 50
 	peers := createTestNetwork(t, numPeers, 10000)
 	defer cleanupPeers(peers)
+}
+
+func TestPeerList(t *testing.T) {
+	numPeers := 10
+	peers := createTestNetworkFlower(t, numPeers, 10000)
+	defer cleanupPeers(peers)
+	time.Sleep(200 * time.Millisecond)
+	if len(peers[0].GetPeers()) != numPeers {
+		t.Errorf("Expected %d peers in peer list, got %d", numPeers, len(peers[0].GetPeers()))
+	}
 }
 
 func TestReuseNetwork(t *testing.T) {
@@ -156,7 +164,8 @@ func TestReuseNetwork(t *testing.T) {
 }
 
 func TestLedgerConsistency(t *testing.T) {
-	peers := createTestNetwork(t, 5, 10000)
+	numPeers := 10
+	peers := createTestNetwork(t, numPeers, 10000)
 	defer cleanupPeers(peers)
 
 	tx1 := &account.Transaction{
