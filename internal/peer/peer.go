@@ -89,7 +89,7 @@ func (p *Peer) Connect(addr string, port int) error {
 	p.peers = append(setOfPeers, p.Addr())
 	// TODO: TEST set of peers
 
-	joinMessage := MakeMessage("join", p.Addr())
+	joinMessage := NewMessage("join", p.Addr())
 
 	p.FloodMessage(joinMessage)
 	return nil
@@ -236,7 +236,7 @@ func (p *Peer) FloodTransaction(t *account.Transaction) {
 	/* Currently FloodMessage doesn't send message to self, so we need to update the ledger for self */
 	// TODO: Check if t.ID was already executed
 	p.ledger.Transaction(t)
-	msg := MakeMessage("transaction", t)
+	msg := NewMessage("transaction", t)
 	p.FloodMessage(msg)
 }
 
@@ -244,7 +244,7 @@ func (p *Peer) handleMessage(peer string, msg Message) error {
 	conn := p.conns[peer]
 	switch msg.Cmd {
 	case "ask_for_set_of_peers":
-		resp := MakeMessage("set_of_peers", p.peers)
+		resp := NewMessage("set_of_peers", p.peers)
 		if err := conn.enc.Encode(resp); err != nil {
 			return fmt.Errorf("failed to encode response: %v", err)
 		}

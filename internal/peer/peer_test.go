@@ -168,39 +168,17 @@ func TestLedgerConsistency(t *testing.T) {
 	peers := createTestNetwork(t, numPeers, 10000)
 	defer cleanupPeers(peers)
 
-	tx1 := &account.Transaction{
-		ID:     "tx1",
-		From:   "Alice",
-		To:     "Bob",
-		Amount: 50,
-	}
-	tx2 := &account.Transaction{
-		ID:     "tx1",
-		From:   "Bob",
-		To:     "Alice",
-		Amount: 50,
-	}
-	tx3 := &account.Transaction{
-		ID:     "tx1",
-		From:   "Alice",
-		To:     "Carol",
-		Amount: 100,
-	}
+	tx1 := account.NewTransaction("tx1", "Alice", "Bob", 50)
+	tx2 := account.NewTransaction("tx2", "Bob", "Alice", 50)
+	tx3 := account.NewTransaction("tx3", "Alice", "Carol", 100)
+	tx4 := account.NewTransaction("tx4", "Alice", "Carol", 100)
+	tx5 := account.NewTransaction("tx5", "Carol", "Bob", 20)
 
-	/*
-		wg := sync.WaitGroup{}
-		Go(&wg, func() { peers[0].FloodTransaction(tx1) })
-		Go(&wg, func() { peers[0].FloodTransaction(tx1) })
-		Go(&wg, func() { peers[1].FloodTransaction(tx1) })
-		Go(&wg, func() { peers[2].FloodTransaction(tx3) })
-		Go(&wg, func() { peers[1].FloodTransaction(tx2) })
-		wg.Wait()
-	*/
 	go peers[0].FloodTransaction(tx1)
-	go peers[0].FloodTransaction(tx1)
-	go peers[1].FloodTransaction(tx1)
-	go peers[2].FloodTransaction(tx3)
-	go peers[1].FloodTransaction(tx2)
+	go peers[0].FloodTransaction(tx2)
+	go peers[1].FloodTransaction(tx3)
+	go peers[2].FloodTransaction(tx4)
+	go peers[1].FloodTransaction(tx5)
 
 	time.Sleep(1 * time.Second) // Wait for transactions to propagate, BAD PRACTICE
 
@@ -219,16 +197,11 @@ func TestRandomLedgerConsistency(t *testing.T) {
 
 	computedLedger := account.MakeLedger()
 
-	for i := 0; i < numTransactions; i++ {
+	for i := range numTransactions {
 		randFrom := names[i%len(names)]
 		randTo := names[(i+1)%len(names)]
 		randAmount := (i + 1) * 10
-		tx := &account.Transaction{
-			ID:     "tx" + strconv.Itoa(i),
-			From:   randFrom,
-			To:     randTo,
-			Amount: randAmount,
-		}
+		tx := account.NewTransaction("tx"+strconv.Itoa(i), randFrom, randTo, randAmount)
 		peerIndex := i % len(peers)
 		peers[peerIndex].FloodTransaction(tx)
 		computedLedger.Transaction(tx)
@@ -248,12 +221,8 @@ func TestRandomLedgerConsistency(t *testing.T) {
 func TestDifferentNetworks(t *testing.T) {
 	peers_group1 := createTestNetwork(t, 5, 10000)
 	peers_group2 := createTestNetwork(t, 5, 20000)
-	peers_group1[0].FloodTransaction(&account.Transaction{
-		ID:     "tx1",
-		From:   "Alice",
-		To:     "Bob",
-		Amount: 50,
-	})
+	tx := account.NewTransaction("tx1", "Alice", "Bob", 50)
+	peers_group1[0].FloodTransaction(tx)
 
 	time.Sleep(1 * time.Second)
 	if len(peers_group2[0].GetLedger().Accounts) != 0 {
@@ -267,12 +236,9 @@ func _TestLateJoiningPeers(t *testing.T) {
 	numPeersGroup2 := 5 // Connects just after the transactions are fired
 	peers_group1 := createTestNetwork(t, numPeersGroup1, 10000)
 	defer cleanupPeers(peers_group1)
-	base_tx := &account.Transaction{
-		ID:     "tx",
-		From:   "Alice",
-		To:     "Bob",
-		Amount: 100,
-	}
+
+	base_tx := account.NewTransaction("tx", "Alice", "Bob", 100)
+
 	for i, peer := range peers_group1 {
 		tx := *base_tx
 		tx.ID = tx.ID + strconv.Itoa(i)

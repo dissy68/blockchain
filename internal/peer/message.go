@@ -8,7 +8,7 @@ type Message struct {
 	Data  json.RawMessage `json:"data"`
 }
 
-func MakeMessage(cmd string, data any) Message {
+func NewMessage(cmd string, data any) Message {
 	jsonData, _ := json.Marshal(data)
 	return Message{Cmd: cmd, Flood: false, Data: jsonData}
 }
