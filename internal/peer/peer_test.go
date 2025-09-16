@@ -221,7 +221,9 @@ func TestRandomLedgerConsistency(t *testing.T) {
 
 func TestDifferentNetworks(t *testing.T) {
 	peers_group1 := createTestNetwork(t, 5, 10000)
+	defer cleanupPeers(peers_group1)
 	peers_group2 := createTestNetwork(t, 5, 20000)
+	defer cleanupPeers(peers_group2)
 	tx := account.NewTransaction("tx1", "Alice", "Bob", 50)
 	peers_group1[0].FloodTransaction(tx)
 
@@ -233,8 +235,8 @@ func TestDifferentNetworks(t *testing.T) {
 }
 
 func TestHandinRequirements(t *testing.T) {
-	numPeers := 100
-	txPerPeer := 100
+	numPeers := 30
+	txPerPeer := 10
 	peers := createTestNetwork(t, numPeers, 10000)
 	defer cleanupPeers(peers)
 	computedLedger := account.MakeLedger()

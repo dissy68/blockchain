@@ -1,6 +1,10 @@
 package peer
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/google/uuid"
+)
 
 type Cmd string
 
@@ -12,6 +16,7 @@ const (
 )
 
 type Message struct {
+	Id    string          `json:"id"`
 	Cmd   Cmd             `json:"cmd"`
 	Flood bool            `json:"flood"`
 	Data  json.RawMessage `json:"data"`
@@ -19,13 +24,6 @@ type Message struct {
 
 func NewMessage(cmd Cmd, data any) Message {
 	jsonData, _ := json.Marshal(data)
-	return Message{Cmd: cmd, Flood: false, Data: jsonData}
+	id := uuid.New().String()
+	return Message{Id: id, Cmd: cmd, Flood: false, Data: jsonData}
 }
-
-/*
-type AnyMessage struct {
-	Cmd   string          `json:"cmd"`
-	Flood bool            `json:"flood"`
-	Data  json.RawMessage `json:"data"`
-}
-*/

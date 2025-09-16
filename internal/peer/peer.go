@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"ledger/internal/account"
+	"ledger/internal/util"
+	"math/rand/v2"
 	"net"
 	"sync"
 )
@@ -27,7 +29,9 @@ type Peer struct {
 	conns   map[string]Conn
 	connsMu sync.RWMutex
 
-	ledger *account.Ledger
+	ledger           *account.Ledger
+	messageHistory   map[string]Message
+	messageHistoryMu sync.Mutex
 
 	done chan struct{}
 }
@@ -35,9 +39,29 @@ type Peer struct {
 func (p *Peer) GetPeers() []string {
 	p.peersMu.Lock()
 	defer p.peersMu.Unlock()
+	peers := make([]string, len(p.peers))
+	copy(peers, p.peers)
+	return peers
+}
+
+func (p *Peer) GetLuckyPeers() []string {
+	threshold := 10
+	percentage := 1.0
+	p.peersMu.Lock()
+	defer p.peersMu.Unlock()
 	// Deep copy p.peers before returning
 	peers := make([]string, len(p.peers))
 	copy(peers, p.peers)
+	num_peers := len(peers)
+	if num_peers > threshold {
+		num_peers = int(float64(num_peers) * percentage)
+	}
+	perm := rand.Perm(num_peers)
+	lucky_peers := make([]string, num_peers)
+	for i := 0; i < num_peers; i++ {
+		lucky_peers[i] = peers[perm[i]]
+	}
+	peers = lucky_peers
 	return peers
 }
 
@@ -47,11 +71,12 @@ func fmtAddr(addr string, port int) string {
 
 func NewPeer(addr string, port int) *Peer {
 	return &Peer{
-		addr:   addr,
-		port:   port,
-		conns:  make(map[string]Conn),
-		ledger: account.MakeLedger(),
-		done:   make(chan struct{}),
+		addr:           addr,
+		port:           port,
+		conns:          make(map[string]Conn),
+		ledger:         account.MakeLedger(),
+		messageHistory: make(map[string]Message),
+		done:           make(chan struct{}),
 	}
 }
 
@@ -138,12 +163,18 @@ func (p *Peer) Addr() string {
 
 func (p *Peer) FloodMessage(msg Message) {
 	msg.Flood = true
-	for _, peer := range p.peers {
+	p.messageHistoryMu.Lock()
+	p.messageHistory[msg.Id] = msg
+	p.messageHistoryMu.Unlock()
+	peers := p.GetLuckyPeers() // Get all peers instead of random
+	for _, peer := range peers {
 		if peer == p.Addr() {
 			continue
 		}
 		p.ensureConnection(peer)
+		p.connsMu.Lock()
 		p.conns[peer].enc.Encode(msg)
+		p.connsMu.Unlock()
 	}
 }
 
@@ -254,6 +285,14 @@ func (p *Peer) FloodTransaction(t *account.Transaction) {
 }
 
 func (p *Peer) handleMessage(peer string, msg Message) error {
+	p.messageHistoryMu.Lock()
+	if _, seen := p.messageHistory[msg.Id]; seen {
+		p.messageHistoryMu.Unlock()
+		return nil
+	}
+	p.messageHistory[msg.Id] = msg
+	p.messageHistoryMu.Unlock()
+
 	conn := p.conns[peer]
 	switch msg.Cmd {
 	case CmdAskForSetOfPeers:
@@ -267,7 +306,9 @@ func (p *Peer) handleMessage(peer string, msg Message) error {
 			fmt.Println("Failed to unmarshal new peer address:", err)
 			return err
 		}
-		p.peers = append(p.peers, new_peer)
+		if !util.Contains(p.peers, new_peer) {
+			p.peers = append(p.peers, new_peer)
+		}
 	case CmdTransaction:
 		var tx *account.Transaction
 		if err := json.Unmarshal(msg.Data, &tx); err != nil {
@@ -277,9 +318,7 @@ func (p *Peer) handleMessage(peer string, msg Message) error {
 		p.ledger.Transaction(tx)
 	}
 	if msg.Flood {
-		// Make sure to check if already seen by others or already sent
-		// Also almost all messages should be flooded, so check if forged messages
-		//p.FloodMessage(msg)
+		p.FloodMessage(msg)
 	}
 	return nil
 }
