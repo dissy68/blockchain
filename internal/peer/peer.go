@@ -10,13 +10,6 @@ import (
 	"sync"
 )
 
-type Conn struct {
-	conn net.Conn
-	enc  *json.Encoder
-	//encMu sync.Mutex
-	dec *json.Decoder
-}
-
 type Peer struct {
 	addr string
 	port int
@@ -34,6 +27,17 @@ type Peer struct {
 	messageHistoryMu sync.Mutex
 
 	done chan struct{}
+}
+
+type Conn struct {
+	conn net.Conn
+	enc  *json.Encoder
+	//encMu sync.Mutex
+	dec *json.Decoder
+}
+
+func fmtAddr(addr string, port int) string {
+	return fmt.Sprintf("%s:%d", addr, port)
 }
 
 func (p *Peer) GetPeers() []string {
@@ -65,8 +69,12 @@ func (p *Peer) GetLuckyPeers() []string {
 	return peers
 }
 
-func fmtAddr(addr string, port int) string {
-	return fmt.Sprintf("%s:%d", addr, port)
+func (p *Peer) GetLedger() *account.Ledger {
+	return p.ledger
+}
+
+func (p *Peer) GetAddr() string {
+	return fmtAddr(p.addr, p.port)
 }
 
 func NewPeer(addr string, port int) *Peer {
@@ -80,10 +88,6 @@ func NewPeer(addr string, port int) *Peer {
 	}
 }
 
-func (p *Peer) GetLedger() *account.Ledger {
-	return p.ledger
-}
-
 func (p *Peer) Connect(addr string, port int) error {
 	addr = fmtAddr(addr, port)
 
@@ -94,7 +98,7 @@ func (p *Peer) Connect(addr string, port int) error {
 		return err
 	}
 
-	if addr == p.Addr() {
+	if addr == p.GetAddr() {
 		// Connecting to self, just return
 		return nil
 	}
@@ -128,75 +132,11 @@ func (p *Peer) Connect(addr string, port int) error {
 		fmt.Println("Invalid response when requested set of peers")
 		//panic(-1)
 	}
-	p.peers = append(setOfPeers, p.Addr())
+	p.peers = append(setOfPeers, p.GetAddr())
 	// TODO: TEST set of peers
 
-	joinMessage := NewMessage(CmdJoin, p.Addr())
+	joinMessage := NewMessage(CmdJoin, p.GetAddr())
 	p.FloodMessage(joinMessage)
-
-	return nil
-}
-
-func (p *Peer) Disconnect() {
-	close(p.done)
-
-	p.lock.Lock()
-	defer p.lock.Unlock()
-
-	if p.ln != nil {
-		// This will cause ln.Accept() to return error
-		p.ln.Close()
-	}
-
-	p.connsMu.Lock()
-	for peer, conn := range p.conns {
-		conn.conn.Close()
-		delete(p.conns, peer)
-	}
-	p.connsMu.Unlock()
-	// TODO: TEST Disconnect
-}
-
-func (p *Peer) Addr() string {
-	return fmtAddr(p.addr, p.port)
-}
-
-func (p *Peer) FloodMessage(msg Message) {
-	msg.Flood = true
-	p.messageHistoryMu.Lock()
-	p.messageHistory[msg.Id] = msg
-	p.messageHistoryMu.Unlock()
-	peers := p.GetLuckyPeers() // Get all peers instead of random
-	for _, peer := range peers {
-		if peer == p.Addr() {
-			continue
-		}
-		p.ensureConnection(peer)
-		p.connsMu.Lock()
-		p.conns[peer].enc.Encode(msg)
-		p.connsMu.Unlock()
-	}
-}
-
-func (p *Peer) ensureConnection(peer string) error {
-	// Already locked from caller Connect()
-	//p.lock.Lock()
-	//defer p.lock.Unlock()
-
-	p.connsMu.Lock()
-	defer p.connsMu.Unlock()
-	if _, exists := p.conns[peer]; exists {
-		return nil
-	}
-
-	conn, err := net.Dial("tcp", peer)
-	if err != nil {
-		fmt.Println("Cannot connect to peer: ", peer)
-		panic(-1)
-	}
-	enc := json.NewEncoder(conn)
-	dec := json.NewDecoder(conn)
-	p.conns[peer] = Conn{conn, enc, dec}
 
 	return nil
 }
@@ -210,7 +150,7 @@ func (p *Peer) Start() error {
 	}
 	// TODO: Test Start
 	p.ln = ln
-	p.peers = []string{p.Addr()}
+	p.peers = []string{p.GetAddr()}
 	go func() {
 		for {
 			select {
@@ -276,14 +216,6 @@ func (p *Peer) readLoop(peer string) {
 	}
 }
 
-func (p *Peer) FloodTransaction(t *account.Transaction) {
-	/* Currently FloodMessage doesn't send message to self, so we need to update the ledger for self */
-	// TODO: Check if t.ID was already executed
-	p.ledger.Transaction(t)
-	msg := NewMessage(CmdTransaction, t)
-	p.FloodMessage(msg)
-}
-
 func (p *Peer) handleMessage(peer string, msg Message) error {
 	p.messageHistoryMu.Lock()
 	if _, seen := p.messageHistory[msg.Id]; seen {
@@ -321,4 +253,67 @@ func (p *Peer) handleMessage(peer string, msg Message) error {
 		p.FloodMessage(msg)
 	}
 	return nil
+}
+
+func (p *Peer) ensureConnection(peer string) error {
+	p.connsMu.Lock()
+	defer p.connsMu.Unlock()
+	if _, exists := p.conns[peer]; exists {
+		return nil
+	}
+
+	conn, err := net.Dial("tcp", peer)
+	if err != nil {
+		fmt.Println("Cannot connect to peer: ", peer)
+		panic(-1)
+	}
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(conn)
+	p.conns[peer] = Conn{conn, enc, dec}
+
+	return nil
+}
+
+func (p *Peer) FloodMessage(msg Message) {
+	msg.Flood = true
+	p.messageHistoryMu.Lock()
+	p.messageHistory[msg.Id] = msg
+	p.messageHistoryMu.Unlock()
+	peers := p.GetLuckyPeers() // Get all peers instead of random
+	for _, peer := range peers {
+		if peer == p.GetAddr() {
+			continue
+		}
+		p.ensureConnection(peer)
+		p.connsMu.Lock()
+		p.conns[peer].enc.Encode(msg)
+		p.connsMu.Unlock()
+	}
+}
+
+func (p *Peer) FloodTransaction(t *account.Transaction) {
+	/* FloodMessage doesn't send message to self, so we need to update the ledger for self */
+	p.ledger.Transaction(t)
+	msg := NewMessage(CmdTransaction, t)
+	p.FloodMessage(msg)
+}
+
+func (p *Peer) Disconnect() {
+	close(p.done)
+
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	if p.ln != nil {
+		// This will cause ln.Accept() to return error
+		p.ln.Close()
+	}
+
+	p.connsMu.Lock()
+	for peer, conn := range p.conns {
+		conn.conn.Close()
+		delete(p.conns, peer)
+	}
+	p.connsMu.Unlock()
+	// TODO: TEST Disconnect
 }
