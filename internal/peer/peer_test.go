@@ -2,6 +2,7 @@ package peer
 
 import (
 	"ledger/internal/account"
+	"math/rand"
 	"strconv"
 	"sync"
 	"testing"
@@ -28,6 +29,16 @@ func verifyLedgerConsistency(t *testing.T, peers []*Peer) bool {
 		ledgers[i] = peer.GetLedger()
 	}
 	return account.VerifyLedgerConsistency(ledgers)
+}
+
+func verifyLedgerConsistencyAndComputed(t *testing.T, peers []*Peer, computed *account.Ledger) bool {
+	if !verifyLedgerConsistency(t, peers) {
+		return false
+	}
+	if !compareLedgers(peers[0].GetLedger(), computed) {
+		return false
+	}
+	return true
 }
 
 func extendTestNetworkLine(t *testing.T, numPeers int, basePort int, entryPort int) []*Peer {
@@ -218,6 +229,30 @@ func TestDifferentNetworks(t *testing.T) {
 	if len(peers_group2[0].GetLedger().Accounts) != 0 {
 		t.Errorf("Expected no accounts in ledger for group2 peer, got: %v",
 			peers_group2[0].GetLedger().Accounts)
+	}
+}
+
+func TestHandinRequirements(t *testing.T) {
+	numPeers := 100
+	txPerPeer := 100
+	peers := createTestNetwork(t, numPeers, 10000)
+	defer cleanupPeers(peers)
+	computedLedger := account.MakeLedger()
+	for i, peer := range peers {
+		for j := range txPerPeer {
+			tx := account.NewTransaction(
+				"tx"+strconv.Itoa(i),
+				"account"+strconv.Itoa(j%5),
+				"account"+strconv.Itoa((j+1)%5),
+				rand.Intn(100),
+			)
+			computedLedger.Transaction(tx)
+			peer.FloodTransaction(tx)
+		}
+	}
+	time.Sleep(1 * time.Second) // Wait for transactions to propagate
+	if !verifyLedgerConsistencyAndComputed(t, peers, computedLedger) {
+		t.Errorf("Ledgers are inconsistent or do not match computed ledger")
 	}
 }
 

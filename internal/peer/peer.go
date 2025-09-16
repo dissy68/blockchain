@@ -76,7 +76,7 @@ func (p *Peer) Connect(addr string, port int) error {
 
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		println("ERRROR: Cannot connect to peer: ", addr)
+		// It's ok to fail, it may mean connecting to self
 		// TODO: TEST BEING ALONE IN A NETWORK
 		return nil
 	}
@@ -173,7 +173,6 @@ func (p *Peer) ensureConnection(peer string) error {
 func (p *Peer) Start() error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	println("Starting to listen")
 	ln, err := net.Listen("tcp", fmtAddr(p.addr, p.port))
 	if err != nil {
 		return err
@@ -189,7 +188,9 @@ func (p *Peer) Start() error {
 			default:
 				conn, err := ln.Accept()
 				if err != nil {
-					panic(err)
+					// Check if err is from use of closed network connection
+					return
+					//panic(err)
 				}
 				// Make this code cleaner
 				enc := json.NewEncoder(conn)
