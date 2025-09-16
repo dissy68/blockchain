@@ -35,16 +35,11 @@ func extendTestNetworkLine(t *testing.T, numPeers int, basePort int, entryPort i
 
 	for i := range numPeers {
 		peers[i] = NewPeer(BASE_ADDR, basePort+i)
-		err := peers[i].Start()
-		if err != nil {
-			t.Fatalf("Failed to start peer %d: %v", i, err)
-		}
+		var err error
 		if i == 0 {
-			if basePort+i != entryPort {
-				err = peers[i].Connect(BASE_ADDR, entryPort)
-				if err != nil {
-					t.Fatalf("First peer failed to connect to entry peer (%d): %v", entryPort, err)
-				}
+			err = peers[i].Connect(BASE_ADDR, entryPort)
+			if err != nil {
+				t.Fatalf("First peer failed to connect to entry peer (%d): %v", entryPort, err)
 			}
 		} else {
 			err = peers[i].Connect(BASE_ADDR, basePort+i-1)
@@ -69,13 +64,8 @@ func extendTestNetworkFlower(t *testing.T, numPeers int, basePort int, entryPort
 
 	for i := range numPeers {
 		peers[i] = NewPeer(BASE_ADDR, basePort+i)
-		err := peers[i].Start()
-		if err != nil {
-			t.Fatalf("Failed to start peer %d: %v", i, err)
-		}
-		if basePort+i != entryPort {
-			err = peers[i].Connect(BASE_ADDR, entryPort)
-		}
+		// BECAUSE of the exercise requirements, intenstonally connect to self first
+		err := peers[i].Connect(BASE_ADDR, entryPort)
 		if err != nil {
 			t.Fatalf("Peer %d failed to connect to peer 0: %v", i, err)
 		}
