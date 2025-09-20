@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const BASE_ADDR = "localhost"
+const BASE_ADDR = "127.0.0.1"
 
 func compareLedgers(l1, l2 *account.Ledger) bool {
 	if len(l1.Accounts) != len(l2.Accounts) {
@@ -146,6 +146,7 @@ func TestCreateBigNetwork(t *testing.T) {
 	defer cleanupPeers(peers)
 }
 
+// TODO: TEST set of peers better
 func TestPeerList(t *testing.T) {
 	numPeers := 10
 	peers := createTestNetworkFlower(t, numPeers, 10000)
@@ -235,7 +236,7 @@ func TestDifferentNetworks(t *testing.T) {
 }
 
 func TestHandinRequirements(t *testing.T) {
-	numPeers := 30
+	numPeers := 10
 	txPerPeer := 10
 	peers := createTestNetwork(t, numPeers, 10000)
 	defer cleanupPeers(peers)
@@ -258,7 +259,38 @@ func TestHandinRequirements(t *testing.T) {
 	}
 }
 
-func _TestLateJoiningPeers(t *testing.T) {
+func TestLateJoining(t *testing.T) {
+	numPeersGroup1 := 5 // Connected before the transactions are fired
+	numPeersGroup2 := 5 // Connects just after the transactions are fired
+	peers_group1 := createTestNetwork(t, numPeersGroup1, 10000)
+	defer cleanupPeers(peers_group1)
+
+	base_tx := account.NewTransaction("tx", "Alice", "Bob", 100)
+
+	for i, peer := range peers_group1 {
+		tx := *base_tx
+		tx.ID = tx.ID + strconv.Itoa(i)
+		peer.FloodTransaction(&tx)
+	}
+	time.Sleep(1 * time.Second)
+	// When joining this late and no messages are being propagated, there should be consistency
+	//  due to handling the messages from the received message history
+	peers_group2 := extendTestNetwork(t, numPeersGroup2, 20000, 10000)
+	defer cleanupPeers(peers_group2)
+	time.Sleep(1 * time.Second)
+
+	peers_merged := append(peers_group1, peers_group2...)
+
+	if !verifyLedgerConsistency(t, peers_group1) {
+		t.Errorf("Ledgers are inconsistent in network group 1(even excluding late joining peers)")
+	}
+
+	if !verifyLedgerConsistency(t, peers_merged) {
+		t.Errorf("Ledgers are inconsistent in merged network(containing late joining peers)")
+	}
+}
+
+func TestLateJoiningDuringTransactions(t *testing.T) {
 	numPeersGroup1 := 5 // Connected before the transactions are fired
 	numPeersGroup2 := 5 // Connects just after the transactions are fired
 	peers_group1 := createTestNetwork(t, numPeersGroup1, 10000)

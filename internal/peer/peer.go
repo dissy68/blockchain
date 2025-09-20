@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"ledger/internal/account"
 	"ledger/internal/util"
+	"math"
 	"math/rand/v2"
 	"net"
 	"sync"
+
+	deadlock "github.com/sasha-s/go-deadlock"
 )
 
 type Peer struct {
@@ -18,13 +21,13 @@ type Peer struct {
 
 	ln      net.Listener
 	peers   []string
-	peersMu sync.RWMutex
+	peersMu deadlock.RWMutex
 	conns   map[string]Conn
-	connsMu sync.RWMutex
+	connsMu deadlock.RWMutex
 
 	ledger           *account.Ledger
 	messageHistory   map[string]Message
-	messageHistoryMu sync.Mutex
+	messageHistoryMu deadlock.RWMutex
 
 	done chan struct{}
 }
@@ -50,23 +53,38 @@ func (p *Peer) GetPeers() []string {
 
 func (p *Peer) GetLuckyPeers() []string {
 	threshold := 10
-	percentage := 1.0
-	p.peersMu.Lock()
-	defer p.peersMu.Unlock()
-	// Deep copy p.peers before returning
-	peers := make([]string, len(p.peers))
-	copy(peers, p.peers)
-	num_peers := len(peers)
-	if num_peers > threshold {
-		num_peers = int(float64(num_peers) * percentage)
+	//percentage := 0.4
+	safety_margin := 3
+
+	peers := p.GetPeers()
+	self := p.GetAddr()
+
+	candidates := peers[:0]
+
+	for _, peer := range peers {
+		if peer != self {
+			candidates = append(candidates, peer)
+		}
 	}
-	perm := rand.Perm(num_peers)
-	lucky_peers := make([]string, num_peers)
-	for i := 0; i < num_peers; i++ {
-		lucky_peers[i] = peers[perm[i]]
+
+	n := len(candidates)
+	if n == 0 {
+		return []string{}
 	}
-	peers = lucky_peers
-	return peers
+	k := n
+
+	if n > threshold {
+		k = int(math.Log(float64(n)) + float64(safety_margin))
+		if k < 2 {
+			k = 2
+		}
+		if k > n {
+			k = n
+		}
+	}
+
+	rand.Shuffle(n, func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
+	return append([]string(nil), candidates[:k]...)
 }
 
 func (p *Peer) GetLedger() *account.Ledger {
@@ -89,7 +107,7 @@ func NewPeer(addr string, port int) *Peer {
 }
 
 func (p *Peer) Connect(addr string, port int) error {
-	addr = fmtAddr(addr, port)
+	fullAddr := fmtAddr(addr, port)
 
 	err := p.Start()
 	p.lock.Lock()
@@ -98,14 +116,13 @@ func (p *Peer) Connect(addr string, port int) error {
 		return err
 	}
 
-	if addr == p.GetAddr() {
+	if fullAddr == p.GetAddr() {
 		// Connecting to self, just return
 		return nil
 	}
 
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.Dial("tcp", fullAddr)
 	if err != nil {
-		// It's ok to fail, it may mean connecting to self
 		// TODO: TEST BEING ALONE IN A NETWORK
 		return nil
 	}
@@ -113,27 +130,20 @@ func (p *Peer) Connect(addr string, port int) error {
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
 	p.connsMu.Lock()
-	p.conns[fmtAddr(addr, port)] = Conn{conn, enc, dec}
+	p.conns[fullAddr] = Conn{conn, enc, dec}
 	p.connsMu.Unlock()
 
+	p.peersMu.Lock()
+	p.peers = append(p.peers, fullAddr)
+	p.peersMu.Unlock()
+
+	go p.readLoop(fullAddr)
+
+	// TODO: Add self.waitingForSetOfPeers = true
 	request := NewMessage(CmdAskForSetOfPeers, nil)
-	enc.Encode(request)
-
-	var reply Message
-	err = dec.Decode(&reply)
-	if err != nil {
-		return err
+	if err := enc.Encode(request); err != nil {
+		return fmt.Errorf("failed to encode request: %v", err)
 	}
-
-	var setOfPeers []string
-	//reply.Cmd == CmdSendSetOfPeers
-	// TODO: Also check CMD (Because another message can arrive before, there should be a channel in the loop that check this)
-	if err := json.Unmarshal(reply.Data, &setOfPeers); err != nil {
-		fmt.Println("Invalid response when requested set of peers")
-		//panic(-1)
-	}
-	p.peers = append(setOfPeers, p.GetAddr())
-	// TODO: TEST set of peers
 
 	joinMessage := NewMessage(CmdJoin, p.GetAddr())
 	p.FloodMessage(joinMessage)
@@ -150,7 +160,9 @@ func (p *Peer) Start() error {
 	}
 	// TODO: Test Start
 	p.ln = ln
+	p.peersMu.Lock()
 	p.peers = []string{p.GetAddr()}
+	p.peersMu.Unlock()
 	go func() {
 		for {
 			select {
@@ -161,7 +173,6 @@ func (p *Peer) Start() error {
 				if err != nil {
 					// Check if err is from use of closed network connection
 					return
-					//panic(err)
 				}
 				// Make this code cleaner
 				enc := json.NewEncoder(conn)
@@ -186,32 +197,24 @@ func (p *Peer) readLoop(peer string) {
 			return
 		default:
 		}
-		p.connsMu.Lock()
-		conn, ok := p.conns[peer]
-		p.connsMu.Unlock()
-		if !ok {
-			// Connection was closed
+		p.connsMu.RLock()
+		conn, exists := p.conns[peer]
+		p.connsMu.RUnlock()
+		if !exists {
+			// Connection was already closed
 			return
 		}
 
 		var msg Message
 		err := conn.dec.Decode(&msg)
 		if err != nil {
-			fmt.Println("Failed to decode message on message loop:", err)
-			p.connsMu.Lock()
-			if c, exists := p.conns[peer]; exists {
-				c.conn.Close()
-				delete(p.conns, peer)
-			}
-			p.connsMu.Unlock()
+			// Drop connection, consider actually deleting the peer from the list
 			return
 		}
 		err = p.handleMessage(peer, msg)
 		if err != nil {
-			fmt.Println("Failed to handle message on message loop")
-			//delete(p.conns, peer)
-			//return
-			panic(-1) // Should not happen, no currupted messages allowed for now
+			// Same here^
+			return
 		}
 	}
 }
@@ -225,12 +228,50 @@ func (p *Peer) handleMessage(peer string, msg Message) error {
 	p.messageHistory[msg.Id] = msg
 	p.messageHistoryMu.Unlock()
 
-	conn := p.conns[peer]
 	switch msg.Cmd {
+	case CmdSetOfPeers:
+		// TODO: Should allow receving set of peers only once and when connecting
+		var setOfPeers []string
+		if err := json.Unmarshal(msg.Data, &setOfPeers); err != nil {
+			fmt.Println("Failed to unmarshal set of peers:", err)
+			return err
+		}
+		p.peersMu.Lock()
+		for _, new_peer := range setOfPeers {
+			if !util.Contains(p.peers, new_peer) {
+				p.peers = append(p.peers, new_peer)
+			}
+		}
+		p.peersMu.Unlock()
+	case CmdMessageHistory:
+		var history map[string]Message
+		if err := json.Unmarshal(msg.Data, &history); err != nil {
+			fmt.Println("Failed to unmarshal message history:", err)
+			return err
+		}
+		// Non-Deterministic message processing order
+		for _, msg := range history {
+			// TODO: Don't execute DMS, implement a separate history or handleDMs
+			if msg.Cmd != CmdAskForSetOfPeers {
+				p.handleMessage("NO_PEER", msg)
+			}
+		}
 	case CmdAskForSetOfPeers:
-		resp := NewMessage(CmdSendSetOfPeers, p.peers)
+		p.connsMu.RLock()
+		conn, exists := p.conns[peer]
+		p.connsMu.RUnlock()
+		if !exists {
+			return fmt.Errorf("connection to peer %s does not exist", peer)
+		}
+		resp := NewMessage(CmdSetOfPeers, p.GetPeers())
 		if err := conn.enc.Encode(resp); err != nil {
 			return fmt.Errorf("failed to encode response: %v", err)
+		}
+		p.messageHistoryMu.RLock()
+		resp2 := NewMessage(CmdMessageHistory, p.messageHistory)
+		p.messageHistoryMu.RUnlock()
+		if err := conn.enc.Encode(resp2); err != nil {
+			return fmt.Errorf("failed to encode message history: %v", err)
 		}
 	case CmdJoin:
 		var new_peer string
@@ -264,8 +305,7 @@ func (p *Peer) ensureConnection(peer string) error {
 
 	conn, err := net.Dial("tcp", peer)
 	if err != nil {
-		fmt.Println("Cannot connect to peer: ", peer)
-		panic(-1)
+		return err
 	}
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
@@ -279,18 +319,28 @@ func (p *Peer) FloodMessage(msg Message) {
 	p.messageHistoryMu.Lock()
 	p.messageHistory[msg.Id] = msg
 	p.messageHistoryMu.Unlock()
-	peers := p.GetLuckyPeers() // Get all peers instead of random
+	peers := p.GetLuckyPeers()
 	for _, peer := range peers {
 		if peer == p.GetAddr() {
 			continue
 		}
-		p.ensureConnection(peer)
-		p.connsMu.Lock()
-		p.conns[peer].enc.Encode(msg)
-		p.connsMu.Unlock()
+		if err := p.ensureConnection(peer); err != nil {
+			//fmt.Println("Failed to ensure connection:", err)
+			// TODO: Consider deleting the peer from the list when
+			// reimplementing the Disconnect better
+			continue
+		}
+		p.connsMu.RLock()
+		conn, exists := p.conns[peer]
+		p.connsMu.RUnlock()
+		if !exists {
+			continue
+		}
+		if err := conn.enc.Encode(msg); err != nil {
+			continue
+		}
 	}
 }
-
 func (p *Peer) FloodTransaction(t *account.Transaction) {
 	/* FloodMessage doesn't send message to self, so we need to update the ledger for self */
 	p.ledger.Transaction(t)

@@ -10,7 +10,8 @@ type Cmd string
 
 const (
 	CmdAskForSetOfPeers Cmd = "ask_for_set_of_peers"
-	CmdSendSetOfPeers   Cmd = "send_set_of_peers"
+	CmdSetOfPeers       Cmd = "set_of_peers"
+	CmdMessageHistory   Cmd = "message_history"
 	CmdTransaction      Cmd = "transaction"
 	CmdJoin             Cmd = "join"
 )
