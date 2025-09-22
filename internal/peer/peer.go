@@ -52,7 +52,7 @@ func (p *Peer) GetPeers() []string {
 }
 
 func (p *Peer) GetLuckyPeers() []string {
-	threshold := 10
+	threshold := 1000 // Something big so it doesn't activate yet, TODO: Check why this doesn't work
 	//percentage := 0.4
 	safety_margin := 3
 
@@ -310,6 +310,8 @@ func (p *Peer) ensureConnection(peer string) error {
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
 	p.conns[peer] = Conn{conn, enc, dec}
+
+	go p.readLoop(peer)
 
 	return nil
 }

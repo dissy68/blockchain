@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-const BASE_ADDR = "127.0.0.1"
-
 func compareLedgers(l1, l2 *account.Ledger) bool {
 	if len(l1.Accounts) != len(l2.Accounts) {
 		return false
@@ -236,7 +234,7 @@ func TestDifferentNetworks(t *testing.T) {
 }
 
 func TestHandinRequirements(t *testing.T) {
-	numPeers := 10
+	numPeers := 15
 	txPerPeer := 10
 	peers := createTestNetwork(t, numPeers, 10000)
 	defer cleanupPeers(peers)
