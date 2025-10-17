@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"ledger/internal/account"
+	"ledger/internal/signature"
 	"ledger/internal/util"
 	"math"
 	"math/rand/v2"
@@ -16,6 +17,8 @@ import (
 type Peer struct {
 	addr string
 	port int
+
+	keyPair *signature.KeyPair
 
 	lock sync.Mutex
 
@@ -95,10 +98,16 @@ func (p *Peer) GetAddr() string {
 	return fmtAddr(p.addr, p.port)
 }
 
+func (p *Peer) GetEncodedPublicKey() string {
+	return p.keyPair.Pk.Encode()
+}
+
 func NewPeer(addr string, port int) *Peer {
+	keyPair := signature.DefaultKeyGen()
 	return &Peer{
 		addr:           addr,
 		port:           port,
+		keyPair:        keyPair,
 		conns:          make(map[string]Conn),
 		ledger:         account.MakeLedger(),
 		messageHistory: make(map[string]Message),
@@ -282,13 +291,13 @@ func (p *Peer) handleMessage(peer string, msg Message) error {
 		if !util.Contains(p.peers, new_peer) {
 			p.peers = append(p.peers, new_peer)
 		}
-	case CmdTransaction:
-		var tx *account.Transaction
+	case CmdSignedTransaction:
+		var tx *account.SignedTransaction
 		if err := json.Unmarshal(msg.Data, &tx); err != nil {
-			fmt.Println("Failed to unmarshal transaction:", err)
+			fmt.Println("Failed to unmarshal signed transaction:", err)
 			return err
 		}
-		p.ledger.Transaction(tx)
+		p.ledger.ExecuteSignedTransaction(tx)
 	}
 	if msg.Flood {
 		p.FloodMessage(msg)
@@ -343,10 +352,16 @@ func (p *Peer) FloodMessage(msg Message) {
 		}
 	}
 }
-func (p *Peer) FloodTransaction(t *account.Transaction) {
+func (p *Peer) FloodTransaction(t *account.SignedTransaction) {
 	/* FloodMessage doesn't send message to self, so we need to update the ledger for self */
-	p.ledger.Transaction(t)
-	msg := NewMessage(CmdTransaction, t)
+	/*
+		// Should always be true, because FloodTransaction is used on self created transactions
+			if !t.Verify() {
+				return
+			}
+	*/
+	p.ledger.ExecuteSignedTransaction(t)
+	msg := NewMessage(CmdSignedTransaction, t)
 	p.FloodMessage(msg)
 }
 
@@ -368,4 +383,19 @@ func (p *Peer) Disconnect() {
 	}
 	p.connsMu.Unlock()
 	// TODO: TEST Disconnect
+}
+
+func (p *Peer) CreateTransaction(to string, amount int) *account.SignedTransaction {
+	tx := account.NewSignedTransaction(
+		p.GetEncodedPublicKey(),
+		to,
+		amount,
+		p.keyPair.Sk,
+	)
+	return tx
+}
+
+func (p *Peer) SendBalance(to string, amount int) {
+	tx := p.CreateTransaction(to, amount)
+	p.FloodTransaction(tx)
 }

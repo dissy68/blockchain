@@ -23,15 +23,20 @@ func main() {
 	computedLedger := account.MakeLedger()
 
 	for i, p := range peers {
-		for j := range txPerPeer {
-			tx := account.NewTransaction(
-				"tx"+strconv.Itoa(i),
-				"account"+strconv.Itoa(j%5),
-				"account"+strconv.Itoa((j+1)%5),
-				rand.Intn(100),
+		for range txPerPeer {
+			fromPeerIndex := i
+			toPeerIndex := (i + 1) % len(peers)
+			amount := rand.Intn(100)
+			p.SendBalance(
+				peers[toPeerIndex].GetEncodedPublicKey(),
+				amount,
 			)
-			computedLedger.Transaction(tx)
-			p.FloodTransaction(tx)
+			computedLedger.Transaction(account.NewTransaction(
+				"tx"+strconv.Itoa(i),
+				"account"+strconv.Itoa(fromPeerIndex),
+				"account"+strconv.Itoa(toPeerIndex),
+				amount,
+			))
 		}
 	}
 
