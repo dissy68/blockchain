@@ -57,20 +57,23 @@ func Serialize(tx *SignedTransaction) []byte {
 	return b.Bytes()
 }
 
-func (l *Ledger) ExecuteSignedTransaction(tx *SignedTransaction) error {
-	// Check signature
-	l.lock.Lock()
-	defer l.lock.Unlock()
-
+func (tx *SignedTransaction) Verify() bool {
 	ser := Serialize(tx)
 	sig := new(big.Int)
 	sig.SetString(tx.Signature, 10)
 	pk, err := signature.Decode(tx.From)
 	if err != nil {
-		return err
+		return false
 	}
+	return signature.Verify(ser, sig, pk)
+}
 
-	if !signature.Verify(ser, sig, pk) {
+func (l *Ledger) ExecuteSignedTransaction(tx *SignedTransaction) error {
+	// Check signature
+	l.lock.Lock()
+	defer l.lock.Unlock()
+
+	if !tx.Verify() {
 		// invalid signature
 		return fmt.Errorf("invalid signature for transaction %s", tx.ID)
 	}
