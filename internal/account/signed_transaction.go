@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"ledger/internal/signature"
 	"math/big"
+
+	"github.com/google/uuid"
 )
 
 type SignedTransaction struct {
@@ -16,7 +18,8 @@ type SignedTransaction struct {
 	Signature string
 }
 
-func NewSignedTransaction(id, from, to string, amount int, sk *signature.SecretKey) *SignedTransaction {
+func NewSignedTransaction(from, to string, amount int, sk *signature.SecretKey) *SignedTransaction {
+	id := uuid.New().String()
 	tx := &SignedTransaction{
 		ID:     id,
 		From:   from,
@@ -61,7 +64,7 @@ func (tx *SignedTransaction) Verify() bool {
 	ser := Serialize(tx)
 	sig := new(big.Int)
 	sig.SetString(tx.Signature, 10)
-	pk, err := signature.Decode(tx.From)
+	pk, err := signature.DecodePk(tx.From)
 	if err != nil {
 		return false
 	}

@@ -115,7 +115,7 @@ func (p *PublicKey) Encode() string {
 	return nEnc + "." + eEnc
 }
 
-func Decode(encodedPk string) (*PublicKey, error) {
+func DecodePk(encodedPk string) (*PublicKey, error) {
 	parts := strings.Split(encodedPk, ".")
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid encoded key, not exactly one '.'(dot)")
