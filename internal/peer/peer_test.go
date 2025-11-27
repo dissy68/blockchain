@@ -1,7 +1,7 @@
 package peer
 
 import (
-	"ledger/internal/account"
+	"au_blockchain/internal/account"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -147,9 +147,10 @@ func TestCreateBigNetwork(t *testing.T) {
 // TODO: TEST set of peers better
 func TestPeerList(t *testing.T) {
 	numPeers := 10
+	time.Sleep(1000 * time.Millisecond)
 	peers := createTestNetworkFlower(t, numPeers, 10000)
 	defer cleanupPeers(peers)
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1000 * time.Millisecond)
 	if len(peers[0].GetPeers()) != numPeers {
 		t.Errorf("Expected %d peers in peer list, got %d", numPeers, len(peers[0].GetPeers()))
 	}

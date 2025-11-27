@@ -1,9 +1,9 @@
 package main
 
 import (
+	"au_blockchain/internal/account"
+	"au_blockchain/internal/peer"
 	"fmt"
-	"ledger/internal/account"
-	"ledger/internal/peer"
 	"math/rand"
 	"strconv"
 	"time"
