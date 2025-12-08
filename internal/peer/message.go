@@ -13,8 +13,9 @@ const (
 	CmdSetOfPeers       Cmd = "set_of_peers"
 	CmdMessageHistory   Cmd = "message_history"
 	//CmdTransaction       Cmd = "transaction"
-	CmdSignedTransaction Cmd = "signed_transaction"
-	CmdJoin              Cmd = "join"
+	//CmdSignedTransaction Cmd = "signed_transaction"
+	CmdBlock Cmd = "block"
+	CmdJoin  Cmd = "join"
 )
 
 type Message struct {

@@ -1,15 +1,19 @@
 package peer
 
 import (
+	blockchain_params "au_blockchain/internal"
 	"au_blockchain/internal/account"
+	"au_blockchain/internal/blockchain"
 	"au_blockchain/internal/signature"
 	"au_blockchain/internal/util"
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"math/rand/v2"
 	"net"
 	"sync"
+	"time"
 
 	deadlock "github.com/sasha-s/go-deadlock"
 )
@@ -28,9 +32,13 @@ type Peer struct {
 	conns   map[string]Conn
 	connsMu deadlock.RWMutex
 
-	ledger           *account.Ledger
-	messageHistory   map[string]Message
-	messageHistoryMu deadlock.RWMutex
+	blockTree *blockchain.BlockTree
+
+	queuedTxs   []account.SignedTransaction
+	queuedTxsMu sync.RWMutex
+
+	seenMessages   map[string]struct{}
+	seenMessagesMu sync.RWMutex
 
 	done chan struct{}
 }
@@ -52,6 +60,20 @@ func (p *Peer) GetPeers() []string {
 	peers := make([]string, len(p.peers))
 	copy(peers, p.peers)
 	return peers
+}
+
+func (p *Peer) GetLedger() *account.Ledger {
+	ledger, err := p.blockTree.GetLedgerAtHead()
+	if err != nil {
+		fmt.Printf("!!!!!!!!!!Error getting ledger at head: %v\n", err)
+		// Should never happen
+		return nil
+	}
+	return ledger
+}
+
+func (p *Peer) GetBlockTree() *blockchain.BlockTree {
+	return p.blockTree
 }
 
 func (p *Peer) GetLuckyPeers() []string {
@@ -90,10 +112,6 @@ func (p *Peer) GetLuckyPeers() []string {
 	return append([]string(nil), candidates[:k]...)
 }
 
-func (p *Peer) GetLedger() *account.Ledger {
-	return p.ledger
-}
-
 func (p *Peer) GetAddr() string {
 	return fmtAddr(p.addr, p.port)
 }
@@ -102,16 +120,18 @@ func (p *Peer) GetEncodedPublicKey() string {
 	return p.keyPair.Pk.Encode()
 }
 
-func NewPeer(addr string, port int) *Peer {
-	keyPair := signature.DefaultKeyGen()
+func NewPeer(addr string, port int, keyPair *signature.KeyPair) *Peer {
+	genesisLedger := account.GetInitialGenesisLedger("genesis_pks.json")
+	genesisBlock := blockchain.CreateGenesisBlock(blockchain_params.GENESIS_SEED, &genesisLedger)
 	return &Peer{
 		addr:           addr,
 		port:           port,
 		keyPair:        keyPair,
 		conns:          make(map[string]Conn),
-		ledger:         account.MakeLedger(),
-		messageHistory: make(map[string]Message),
+		blockTree:      blockchain.NewBlockTree(genesisBlock),
 		done:           make(chan struct{}),
+		seenMessages:   make(map[string]struct{}),
+		seenMessagesMu: sync.RWMutex{},
 	}
 }
 
@@ -172,6 +192,8 @@ func (p *Peer) Start() error {
 	p.peersMu.Lock()
 	p.peers = []string{p.GetAddr()}
 	p.peersMu.Unlock()
+
+	go p.gambleLoop()
 	go func() {
 		for {
 			select {
@@ -181,6 +203,7 @@ func (p *Peer) Start() error {
 				conn, err := ln.Accept()
 				if err != nil {
 					// Check if err is from use of closed network connection
+					fmt.Println("Error accepting connection:", err)
 					return
 				}
 				// Make this code cleaner
@@ -197,6 +220,75 @@ func (p *Peer) Start() error {
 		}
 	}()
 	return nil
+}
+
+func (p *Peer) gamble() {
+	slot := blockchain.CurrentSlot(time.Now()) // TODO: Implement this using the SlotLength and current time
+	draw := blockchain.Draw(slot, p.keyPair)
+	ledger, err := p.blockTree.GetLedgerAtHead()
+	if err != nil {
+		// Handle error appropriately, e.g., log or return
+		fmt.Println("Error getting ledger at head:", err)
+		// Should not happen
+		return
+	}
+	hash := blockchain.Hash(blockchain.LOTTERY_PREFIX, slot, p.keyPair.Pk, draw)
+	hashValue := blockchain.HashValue(hash)
+	value := new(big.Int).Mul(hashValue, big.NewInt(int64(ledger.GetBalance(p.GetEncodedPublicKey()))))
+	if value.Cmp(big.NewInt(int64(blockchain_params.HARDNESS))) >= 0 {
+		if p.GetEncodedPublicKey() == "pvJPUUUZnRRLyyem6oSEg4Ueim3Wpv8pgy/6FoG4qJmKlD8Q7QO1mQBG1ohxp0HZzlO+fMcT5HtozrLzdywk6Q==.Aw==" {
+			fmt.Println("DEBUG: peer0 won the lottery for slot", slot)
+			fmt.Println("DEBUG: peer0 won the lottery for slot", slot)
+			fmt.Println("DEBUG: peer0 won the lottery for slot", slot)
+			fmt.Println("DEBUG: peer0 won the lottery for slot", slot)
+			fmt.Println("DEBUG: peer0 won the lottery for slot", slot)
+		}
+		// Send new block
+		var txs []account.SignedTransaction
+		/*
+			p.queuedTxsMu.RLock()
+			if len(p.queuedTxs) == 0 {
+				if p.GetEncodedPublicKey() == "pvJPUUUZnRRLyyem6oSEg4Ueim3Wpv8pgy/6FoG4qJmKlD8Q7QO1mQBG1ohxp0HZzlO+fMcT5HtozrLzdywk6Q==.Aw==" {
+					fmt.Println("DEBUG: peer0 has no transactions to send")
+				}
+				return
+			}
+			p.queuedTxsMu.RUnlock()
+		*/
+		p.queuedTxsMu.Lock()
+		if len(p.queuedTxs) > blockchain_params.BLOCK_SIZE_LIMIT {
+			txs = p.queuedTxs[:blockchain_params.BLOCK_SIZE_LIMIT]
+			p.queuedTxs = p.queuedTxs[blockchain_params.BLOCK_SIZE_LIMIT:]
+		} else {
+			txs = p.queuedTxs
+			p.queuedTxs = []account.SignedTransaction{}
+		}
+		p.queuedTxsMu.Unlock()
+		newBlock := p.blockTree.CreateNewBlock(slot, draw, txs, p.GetEncodedPublicKey())
+		if p.GetEncodedPublicKey() == "pvJPUUUZnRRLyyem6oSEg4Ueim3Wpv8pgy/6FoG4qJmKlD8Q7QO1mQBG1ohxp0HZzlO+fMcT5HtozrLzdywk6Q==.Aw==" {
+			fmt.Println("DEBUG: peer0 created a block", newBlock)
+		}
+		if !p.blockTree.AddBlock(newBlock) {
+			fmt.Println("Failed to add new block to block tree")
+			return
+		}
+		blockMessage := NewMessage(CmdBlock, newBlock)
+		p.FloodMessage(blockMessage)
+	}
+}
+
+func (p *Peer) gambleLoop() {
+	ticker := time.NewTicker(time.Second) // or SlotLength
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-p.done:
+			return
+		case <-ticker.C:
+			p.gamble()
+		}
+	}
 }
 
 func (p *Peer) readLoop(peer string) {
@@ -229,13 +321,16 @@ func (p *Peer) readLoop(peer string) {
 }
 
 func (p *Peer) handleMessage(peer string, msg Message) error {
-	p.messageHistoryMu.Lock()
-	if _, seen := p.messageHistory[msg.Id]; seen {
-		p.messageHistoryMu.Unlock()
+	// TODO: Check if message was already seen
+	p.seenMessagesMu.RLock()
+	_, seen := p.seenMessages[msg.Id]
+	p.seenMessagesMu.RUnlock()
+	if seen {
 		return nil
 	}
-	p.messageHistory[msg.Id] = msg
-	p.messageHistoryMu.Unlock()
+	p.seenMessagesMu.Lock()
+	p.seenMessages[msg.Id] = struct{}{}
+	p.seenMessagesMu.Unlock()
 
 	switch msg.Cmd {
 	case CmdSetOfPeers:
@@ -252,19 +347,6 @@ func (p *Peer) handleMessage(peer string, msg Message) error {
 			}
 		}
 		p.peersMu.Unlock()
-	case CmdMessageHistory:
-		var history map[string]Message
-		if err := json.Unmarshal(msg.Data, &history); err != nil {
-			fmt.Println("Failed to unmarshal message history:", err)
-			return err
-		}
-		// Non-Deterministic message processing order
-		for _, msg := range history {
-			// TODO: Don't execute DMS, implement a separate history or handleDMs
-			if msg.Cmd != CmdAskForSetOfPeers {
-				p.handleMessage("NO_PEER", msg)
-			}
-		}
 	case CmdAskForSetOfPeers:
 		p.connsMu.RLock()
 		conn, exists := p.conns[peer]
@@ -276,32 +358,47 @@ func (p *Peer) handleMessage(peer string, msg Message) error {
 		if err := conn.enc.Encode(resp); err != nil {
 			return fmt.Errorf("failed to encode response: %v", err)
 		}
-		p.messageHistoryMu.RLock()
-		resp2 := NewMessage(CmdMessageHistory, p.messageHistory)
-		p.messageHistoryMu.RUnlock()
-		if err := conn.enc.Encode(resp2); err != nil {
-			return fmt.Errorf("failed to encode message history: %v", err)
-		}
 	case CmdJoin:
 		var new_peer string
 		if err := json.Unmarshal(msg.Data, &new_peer); err != nil {
 			fmt.Println("Failed to unmarshal new peer address:", err)
 			return err
 		}
+		p.peersMu.Lock()
 		if !util.Contains(p.peers, new_peer) {
 			p.peers = append(p.peers, new_peer)
 		}
-	case CmdSignedTransaction:
-		var tx *account.SignedTransaction
-		if err := json.Unmarshal(msg.Data, &tx); err != nil {
-			fmt.Println("Failed to unmarshal signed transaction:", err)
+		p.peersMu.Unlock()
+
+	case CmdBlock:
+		var block blockchain.Block
+		if err := json.Unmarshal(msg.Data, &block); err != nil {
+			fmt.Println("Failed to unmarshal block:", err)
 			return err
 		}
-		p.ledger.ExecuteSignedTransaction(tx)
+		// Check if draw is valid
+		// TODO: Make sure the creater of the block adds it's own CreatorPk
+		if err := p.handleBlock(&block); err != nil {
+			fmt.Println("Failed to handle block:", err)
+			return err
+		}
+
 	}
 	if msg.Flood {
 		p.FloodMessage(msg)
 	}
+	return nil
+}
+
+func (p *Peer) handleBlock(block *blockchain.Block) error {
+	if err := p.blockTree.CheckBlock(block); err != nil {
+		return fmt.Errorf("block check failed: %v", err)
+	}
+
+	if !p.blockTree.AddBlock(block) {
+		return fmt.Errorf("failed to add block to block tree")
+	}
+
 	return nil
 }
 
@@ -327,9 +424,6 @@ func (p *Peer) ensureConnection(peer string) error {
 
 func (p *Peer) FloodMessage(msg Message) {
 	msg.Flood = true
-	p.messageHistoryMu.Lock()
-	p.messageHistory[msg.Id] = msg
-	p.messageHistoryMu.Unlock()
 	peers := p.GetLuckyPeers()
 	for _, peer := range peers {
 		if peer == p.GetAddr() {
@@ -351,18 +445,6 @@ func (p *Peer) FloodMessage(msg Message) {
 			continue
 		}
 	}
-}
-func (p *Peer) FloodTransaction(t *account.SignedTransaction) {
-	/* FloodMessage doesn't send message to self, so we need to update the ledger for self */
-	/*
-		// Should always be true, because FloodTransaction is used on self created transactions
-			if !t.Verify() {
-				return
-			}
-	*/
-	p.ledger.ExecuteSignedTransaction(t)
-	msg := NewMessage(CmdSignedTransaction, t)
-	p.FloodMessage(msg)
 }
 
 func (p *Peer) Disconnect() {
@@ -397,5 +479,7 @@ func (p *Peer) CreateTransaction(to string, amount int) *account.SignedTransacti
 
 func (p *Peer) SendBalance(to string, amount int) {
 	tx := p.CreateTransaction(to, amount)
-	p.FloodTransaction(tx)
+	p.queuedTxsMu.Lock()
+	defer p.queuedTxsMu.Unlock()
+	p.queuedTxs = append(p.queuedTxs, *tx)
 }

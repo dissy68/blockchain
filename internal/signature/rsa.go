@@ -40,6 +40,13 @@ func NewPublicKey(n *big.Int, e *big.Int) *PublicKey {
 	return pk
 }
 
+func DANGER_NewSecretKey(n *big.Int, d *big.Int) *SecretKey {
+	sk := new(SecretKey)
+	sk.n = n
+	sk.d = d
+	return sk
+}
+
 func NewKeyPair(sk *SecretKey, pk *PublicKey) *KeyPair {
 	kp := new(KeyPair)
 	kp.Sk = sk
@@ -115,6 +122,15 @@ func (p *PublicKey) Encode() string {
 	return nEnc + "." + eEnc
 }
 
+func (s *SecretKey) DANGER_Encode() string {
+	nBytes := s.n.Bytes()
+	dBytes := s.d.Bytes()
+
+	nEnc := base64.StdEncoding.EncodeToString(nBytes)
+	dEnc := base64.StdEncoding.EncodeToString(dBytes)
+	return nEnc + "." + dEnc
+}
+
 func DecodePk(encodedPk string) (*PublicKey, error) {
 	parts := strings.Split(encodedPk, ".")
 	if len(parts) != 2 {
@@ -133,6 +149,26 @@ func DecodePk(encodedPk string) (*PublicKey, error) {
 	n := new(big.Int).SetBytes(nBytes)
 	e := new(big.Int).SetBytes(eBytes)
 	return NewPublicKey(n, e), nil
+}
+
+func DANGER_DecodeSk(encodedSk string) (*SecretKey, error) {
+	parts := strings.Split(encodedSk, ".")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid encoded key, not exactly one '.'(dot)")
+	}
+
+	nBytes, err := base64.StdEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, err
+	}
+	dBytes, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, err
+	}
+
+	n := new(big.Int).SetBytes(nBytes)
+	d := new(big.Int).SetBytes(dBytes)
+	return DANGER_NewSecretKey(n, d), nil
 }
 
 func Sign(message []byte, sk *SecretKey) *big.Int {

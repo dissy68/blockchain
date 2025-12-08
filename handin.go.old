@@ -1,0 +1,47 @@
+package main
+
+import (
+	blockchain_params "au_blockchain/internal"
+	"au_blockchain/internal/account"
+	"au_blockchain/internal/peer"
+	"fmt"
+	"math/rand"
+	"time"
+)
+
+const BASE_PORT = 10000
+
+func main() {
+	rand.Seed(time.Now().UnixNano())
+
+	//kp := signature.DefaultKeyGen()
+	//kp := blockchain.DANGER_GetGenesisKeyPair("genesis_pks_sks.json", 0)
+
+	n := blockchain_params.NUM_GENESIS_ACCOUNTS
+	peers := make([]*peer.Peer, n)
+
+	for i := range n {
+		peers[i] = peer.NewPeer("localhost", BASE_PORT+i, account.DANGER_GetGenesisKeyPair("genesis_pks_sks.json", i))
+		peers[i].Connect("localhost", BASE_PORT)
+	}
+	fmt.Println(peers[0].GetEncodedPublicKey())
+	for {
+		peers[0].SendBalance(peers[1].GetEncodedPublicKey(), 10)
+		// Check wbhy it doesn't send
+		//fmt.Println("BlockTree")
+		//peers[0].GetBlockTree().Display()
+		fmt.Println("Ledger at Head:")
+		peers[0].GetLedger().Display()
+		time.Sleep(1 * time.Second)
+		//peer1.Start()
+		/*
+			fmt.Println("Current Block Tree:")
+			peer1.GetBlockTree().Display()
+			fmt.Println("Head Block Hash:")
+			fmt.Println(peer1.GetBlockTree().GetHead().Block.Hash)
+			fmt.Println("Ledger at Head:")
+			peer1.GetLedger().Display()
+			time.Sleep(1 * time.Second)
+		*/
+	}
+}

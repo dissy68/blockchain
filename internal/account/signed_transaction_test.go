@@ -1,7 +1,7 @@
 package account
 
 import (
-	"ledger/internal/signature"
+	"au_blockchain/internal/signature"
 	"math/big"
 	"testing"
 )
@@ -19,10 +19,12 @@ func TestSignedTransactionSignature(t *testing.T) {
 }
 
 func TestSignedTransactionExecution(t *testing.T) {
-	kp1 := signature.DefaultKeyGen()
-	kp2 := signature.DefaultKeyGen()
+	//kp1 := signature.DefaultKeyGen()
+	//kp2 := signature.DefaultKeyGen()
+	kp1 := DANGER_GetGenesisKeyPair("genesis_pks_sks.json", 0)
+	kp2 := DANGER_GetGenesisKeyPair("genesis_pks_sks.json", 1)
 	ledger := MakeLedger()
-	ledger.Accounts[kp1.Pk.Encode()] = 100
+	ledger.Accounts[kp1.Pk.Encode()] = 101
 	ledger.Accounts[kp2.Pk.Encode()] = 50
 	tx := NewSignedTransaction(kp1.Pk.Encode(), kp2.Pk.Encode(), 100, kp1.Sk)
 	if err := ledger.ExecuteSignedTransaction(tx); err != nil {

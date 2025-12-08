@@ -1,6 +1,7 @@
 package peer
 
 import (
+	"au_blockchain/internal/signature"
 	"fmt"
 	"sync"
 	"time"
@@ -26,7 +27,8 @@ func ExtendTestNetworkFlower(numPeers int, basePort int, entryPort int) []*Peer 
 	peers := make([]*Peer, numPeers)
 
 	for i := 0; i < numPeers; i++ {
-		peers[i] = NewPeer(BASE_ADDR, basePort+i)
+		kp := signature.DefaultKeyGen()
+		peers[i] = NewPeer(BASE_ADDR, basePort+i, kp)
 		err := peers[i].Connect(BASE_ADDR, entryPort)
 		if err != nil {
 			fmt.Printf("Warning: Peer %d failed to connect to entry peer: %v\n", i, err)
@@ -40,7 +42,8 @@ func ExtendTestNetworkLine(numPeers int, basePort int, entryPort int) []*Peer {
 	peers := make([]*Peer, numPeers)
 
 	for i := 0; i < numPeers; i++ {
-		peers[i] = NewPeer(BASE_ADDR, basePort+i)
+		kp := signature.DefaultKeyGen()
+		peers[i] = NewPeer(BASE_ADDR, basePort+i, kp)
 		var err error
 		if i == 0 {
 			err = peers[i].Connect(BASE_ADDR, entryPort)

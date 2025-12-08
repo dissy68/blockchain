@@ -1,10 +1,11 @@
 package account
 
 import (
+	blockchain_params "au_blockchain/internal"
+	"au_blockchain/internal/signature"
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"ledger/internal/signature"
 	"math/big"
 
 	"github.com/google/uuid"
@@ -72,17 +73,26 @@ func (tx *SignedTransaction) Verify() bool {
 }
 
 func (l *Ledger) ExecuteSignedTransaction(tx *SignedTransaction) error {
-	// Check signature
 	l.lock.Lock()
 	defer l.lock.Unlock()
-
 	if !tx.Verify() {
-		// invalid signature
-		return fmt.Errorf("invalid signature for transaction %s", tx.ID)
+		return fmt.Errorf("invalid transaction signature")
 	}
-
-	l.Accounts[tx.From] -= tx.Amount
+	if tx.Amount <= 0 {
+		return fmt.Errorf("transaction amount must be positive")
+	}
+	if l.Accounts[tx.From] < tx.Amount+blockchain_params.TRANSACTION_FEE {
+		return fmt.Errorf("insufficient funds for transaction %s", tx.ID)
+	}
+	l.Accounts[tx.From] -= tx.Amount + blockchain_params.TRANSACTION_FEE
 	l.Accounts[tx.To] += tx.Amount
+	return nil
+}
 
+func (l *Ledger) ExecuteGenesisTransactions(tx *SignedTransaction) error {
+	l.lock.Lock()
+	defer l.lock.Unlock()
+	//l.Accounts[tx.From] -= tx.Amount + blockchain_params.TRANSACTION_FEE
+	l.Accounts[tx.To] += tx.Amount
 	return nil
 }
